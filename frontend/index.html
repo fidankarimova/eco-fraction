@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Eco-Fraction — generation monitor</title>
+<meta name="description" content="Live generation telemetry for a tokenised renewable energy asset.">
+<link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+<a class="skip" href="#readouts">Skip to readings</a>
+
+<header class="masthead">
+  <div class="masthead__id">
+    <p class="wordmark">Eco&#8209;Fraction</p>
+    <h1 id="asset-name">Loading asset…</h1>
+    <p class="asset-meta">
+      <span id="asset-location">—</span>
+      <span class="sep" aria-hidden="true">/</span>
+      <span id="asset-capacity">—</span>
+    </p>
+  </div>
+
+  <div class="masthead__status">
+    <div class="status" id="status" data-state="unknown" role="status" aria-live="polite">
+      <span class="status__dot" aria-hidden="true"></span>
+      <span class="status__label" id="status-label">Connecting</span>
+    </div>
+    <p class="status__detail" id="status-detail">Waiting for the first reading</p>
+    <p class="clock">
+      <span class="lbl">plant local time</span>
+      <span class="mono" id="plant-clock">--:--:--</span>
+    </p>
+  </div>
+</header>
+
+<div class="banner" id="banner" hidden>
+  <p id="banner-text"></p>
+</div>
+
+<main>
+  <section class="readouts" id="readouts" aria-label="Current measurements">
+    <article class="readout readout--primary">
+      <p class="lbl">current power</p>
+      <p class="value mono"><span id="power-value">—</span><span class="unit">kW</span></p>
+      <div class="meter" role="img" aria-label="Output as a share of inverter capacity">
+        <div class="meter__fill" id="power-meter"></div>
+      </div>
+      <p class="sub"><span class="mono" id="power-percent">—</span> of inverter rating</p>
+    </article>
+
+    <article class="readout">
+      <p class="lbl">energy today</p>
+      <p class="value mono"><span id="energy-today">—</span><span class="unit">kWh</span></p>
+      <p class="sub">peak <span class="mono" id="peak-today">—</span> kW · yield
+        <span class="mono" id="yield-today">—</span> kWh/kWp</p>
+    </article>
+
+    <article class="readout">
+      <p class="lbl">energy since monitoring began</p>
+      <p class="value mono"><span id="energy-total">—</span><span class="unit">kWh</span></p>
+      <p class="sub"><span class="mono" id="co2-total">—</span> kg CO₂e avoided
+        <span class="flag" title="Placeholder emission factor — must be replaced with a cited national figure">unverified factor</span>
+      </p>
+    </article>
+
+    <article class="readout">
+      <p class="lbl">array conditions</p>
+      <p class="value mono value--small"><span id="irradiance">—</span><span class="unit">W/m²</span></p>
+      <p class="sub">module <span class="mono" id="module-temp">—</span> °C · ambient
+        <span class="mono" id="ambient-temp">—</span> °C</p>
+    </article>
+  </section>
+
+  <section class="panel" aria-labelledby="chart-heading">
+    <div class="panel__head">
+      <h2 id="chart-heading">Generation over time</h2>
+      <div class="windows" role="group" aria-label="Chart time window">
+        <button type="button" data-hours="6" data-bucket="5">6 h</button>
+        <button type="button" data-hours="24" data-bucket="15" class="is-active">24 h</button>
+        <button type="button" data-hours="72" data-bucket="60">3 d</button>
+        <button type="button" data-hours="168" data-bucket="60">7 d</button>
+      </div>
+    </div>
+
+    <figure class="chart">
+      <svg id="chart" viewBox="0 0 1000 300" preserveAspectRatio="none" role="img"
+           aria-labelledby="chart-heading" aria-describedby="chart-caption"></svg>
+      <div class="tooltip" id="tooltip" hidden></div>
+      <figcaption id="chart-caption" class="chart__caption">
+        <span class="key"><i class="swatch swatch--solar" aria-hidden="true"></i>AC power output</span>
+        <span class="key"><i class="swatch swatch--night" aria-hidden="true"></i>Sun below horizon</span>
+        <span class="key"><i class="swatch swatch--now" aria-hidden="true"></i>Now</span>
+        <span class="key key--right" id="chart-total">—</span>
+      </figcaption>
+    </figure>
+  </section>
+
+  <section class="panel" aria-labelledby="recent-heading">
+    <div class="panel__head">
+      <h2 id="recent-heading">Recent readings</h2>
+      <p class="panel__note"><span class="mono" id="reading-count">—</span> stored ·
+        newest first · times are plant local</p>
+    </div>
+    <div class="table-wrap">
+      <table class="readings">
+        <thead>
+          <tr>
+            <th scope="col">Time</th>
+            <th scope="col" class="num">Power (W)</th>
+            <th scope="col" class="num">Irradiance (W/m²)</th>
+            <th scope="col" class="num">Module (°C)</th>
+            <th scope="col" class="num">Interval (Wh)</th>
+            <th scope="col" class="num">Seq</th>
+          </tr>
+        </thead>
+        <tbody id="readings-body">
+          <tr><td colspan="6" class="empty">Loading readings…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<footer class="foot">
+  <p>Stage 1 prototype. Telemetry is produced by a simulated meter driven by a
+     physical PV model (NOAA solar position, Haurwitz clear-sky, Erbs diffuse split,
+     NOCT thermal model). No blockchain, payment or real financial transaction is
+     involved.</p>
+  <p><a href="/api/docs">API documentation</a></p>
+</footer>
+
+<script src="./app.js"></script>
+</body>
+</html>
