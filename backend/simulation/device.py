@@ -106,7 +106,7 @@ def _recent_bias_ratios(
     multiplier applied for a while. That history is what makes a quiet 18% bias
     detectable when a single reading cannot be.
     """
-    from backend.validation import clear_sky_poa
+    from backend.validation import observed_reference_poa
 
     rows = session.execute(
         select(Reading.recorded_at, Reading.poa_irradiance_w_m2)
@@ -124,9 +124,9 @@ def _recent_bias_ratios(
         recorded_at = recorded_at if recorded_at.tzinfo else recorded_at.replace(
             tzinfo=timezone.utc
         )
-        reference_poa, _ = clear_sky_poa(asset, recorded_at)
-        if reference_poa > 50.0:
-            ratios.append(poa * multiplier / reference_poa)
+        observed_poa, _ = observed_reference_poa(asset, recorded_at)
+        if observed_poa > 50.0:
+            ratios.append(poa * multiplier / observed_poa)
     return ratios
 
 

@@ -119,17 +119,17 @@ class FakeAsset:
     tilt_deg = 30.0
     azimuth_deg = 180.0
     albedo = 0.20
+    weather_seed = 1
     dc_capacity_kw = 12.5
     ac_capacity_kw = 10.0
     inverter_efficiency = 0.97
 
 
 def _honest_reading(now: datetime) -> tuple[dict, str, DeviceContext]:
-    from backend.validation import clear_sky_poa
+    from backend.validation import observed_reference_poa
 
     keys = generate_keypair()
-    reference_poa, _ = clear_sky_poa(FakeAsset(), now)
-    poa = reference_poa * 0.8
+    poa, _ = observed_reference_poa(FakeAsset(), now)
     power = 12.5 * 1000 * (poa / 1000.0) * 0.97
     measurement = _measurement(
         recorded_at=now,
@@ -169,7 +169,7 @@ def test_every_attack_is_detected(attack_key):
         last_sequence=measurement["sequence"] - 1,
         last_recorded_at=now - timedelta(minutes=5),
         last_ac_power_w=measurement["ac_power_w"],
-        recent_bias_ratios=[1.18] * 10 if attack_key == "scaling_drift" else [0.8] * 10,
+        recent_bias_ratios=[1.18] * 10 if attack_key == "scaling_drift" else [1.0] * 10,
     )
     tampered, signature, definition = apply_attack(
         attack_key, measurement, FakeAsset(), keys.private_key_hex

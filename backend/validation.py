@@ -4,7 +4,7 @@ Nothing reaches an anchored batch, an impact record or a payout unless it passes
 here. That ordering is the project's actual thesis: trust is a *precondition of
 payment*, not a badge on a dashboard.
 
-Seven independent checks, deliberately of three different kinds so that no single
+Eight independent checks, deliberately of three different kinds so that no single
 compromise defeats them all:
 
 * **Cryptographic** - signature, sequence monotonicity, timestamp window.
@@ -13,13 +13,15 @@ compromise defeats them all:
   Catches values that no real array could produce, *even when correctly signed by
   a compromised device*.
 * **Cross-reference** - declared irradiance against an independent model of the
-  same instant. Catches a device reporting internally-consistent fiction.
+  same instant, under the same weather. Catches a device reporting
+  internally-consistent fiction, including a quiet constant multiplier that every
+  single-reading check would pass.
 
 The physical and cross-reference checks are the ones that matter for the oracle
 problem: they do not rely on the device being honest, only on physics.
 
-Detection statistics are measured, not asserted - see ``tests/test_validation.py``
-and ``scripts/attack_report.py``.
+Detection statistics are measured, not asserted - see ``tests/test_verification.py``
+and ``scripts/evidence_report.py``.
 """
 
 from __future__ import annotations
@@ -29,6 +31,7 @@ from datetime import datetime, timedelta, timezone
 
 from backend.crypto_util import verify_measurement
 from backend.simulation.solar import (
+    clearness_index,
     haurwitz_clear_sky_ghi,
     plane_of_array_irradiance,
     solar_position,
@@ -64,6 +67,11 @@ MAX_BACKDATE_SECONDS = 3600
 # A real array cannot exceed clear-sky plane-of-array irradiance; allow headroom
 # for cloud-edge enhancement, which is a genuine effect.
 CLEAR_SKY_TOLERANCE = 1.35
+
+# The cross-reference checks compare against an observer of the *same weather*,
+# not against clear sky, so their tolerance is a margin for model disagreement
+# between two observers - not a margin for the entire cloud cover of the day.
+REFERENCE_TOLERANCE = 1.35
 # Full swing of the inverter rating in one second is not physically possible.
 MAX_RAMP_W_PER_SECOND_FRACTION = 0.5
 
@@ -137,6 +145,38 @@ def clear_sky_poa(asset, when: datetime) -> tuple[float, float]:
     when = _as_utc(when)
     elevation, azimuth = solar_position(asset.latitude, asset.longitude, when)
     ghi = haurwitz_clear_sky_ghi(elevation)
+    poa = plane_of_array_irradiance(
+        ghi=ghi,
+        elevation_deg=elevation,
+        azimuth_deg=azimuth,
+        day_of_year=when.timetuple().tm_yday,
+        tilt_deg=asset.tilt_deg,
+        surface_azimuth_deg=asset.azimuth_deg,
+        albedo=asset.albedo,
+    )
+    return poa, elevation
+
+
+def observed_reference_poa(asset, when: datetime) -> tuple[float, float]:
+    """Plane-of-array irradiance an independent observer of the same sky would report.
+
+    The *ceiling* checks compare against clear sky, because no array can out-produce
+    clear sky whatever the weather. The cross-reference checks cannot use that same
+    number: under cloud an honest device legitimately reports a fraction of the
+    clear-sky value, and that slack is exactly where a quiet multiplier hides. An
+    18% over-report on a 70%-clouded afternoon still lands far below the clear-sky
+    line, so a clear-sky reference can never see it - no matter how many readings
+    it averages.
+
+    So this reference models the cloud cover the sky actually had, the way a
+    neighbouring station or a satellite pass would observe it. The weather model is
+    deterministic and keyed on the asset's published weather seed, which is what
+    lets a reviewer recompute this reference for any past instant and get the same
+    number the validator used.
+    """
+    when = _as_utc(when)
+    elevation, azimuth = solar_position(asset.latitude, asset.longitude, when)
+    ghi = haurwitz_clear_sky_ghi(elevation) * clearness_index(when, asset.weather_seed)
     poa = plane_of_array_irradiance(
         ghi=ghi,
         elevation_deg=elevation,
@@ -252,10 +292,11 @@ def validate_measurement(
 
     # --- cross-reference ---------------------------------------------------
     # The device declares its own irradiance. Compare it with an independent model
-    # of the same instant. In production this reference is satellite irradiance or
-    # a neighbouring station; here it is the clear-sky ceiling, which is enough to
-    # catch a device inventing sunlight it cannot have had.
-    reference_ceiling = reference_poa * CLEAR_SKY_TOLERANCE + 20.0
+    # of the same instant - one that saw the same clouds, not an idealised clear
+    # sky. In production this reference is satellite irradiance or a neighbouring
+    # station; here it is the deterministic weather model, recomputable by anyone.
+    observed_poa, _ = observed_reference_poa(asset, recorded_at)
+    reference_ceiling = observed_poa * REFERENCE_TOLERANCE + 20.0
     irradiance_ok = poa <= reference_ceiling
     checks.append(
         CheckResult(
@@ -272,8 +313,8 @@ def validate_measurement(
     bias_ok = True
     bias_detail = "No sustained deviation from the independent reference"
     ratios = list(context.recent_bias_ratios)
-    if reference_poa > 50.0:
-        ratios.append(poa / reference_poa)
+    if observed_poa > 50.0:
+        ratios.append(poa / observed_poa)
     if len(ratios) >= BIAS_WINDOW_MIN_SAMPLES:
         window = ratios[-BIAS_WINDOW_MIN_SAMPLES:]
         mean_ratio = sum(window) / len(window)

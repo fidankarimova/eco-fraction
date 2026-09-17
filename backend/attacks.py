@@ -14,7 +14,7 @@ Two of these attacks defeat the signature and are caught only by physics
 physics and is caught only by cryptography (``replay``). That is the point of
 having both: neither layer alone is sufficient.
 
-The same definitions drive ``tests/test_validation.py``, so the demo and the test
+The same definitions drive ``tests/test_verification.py``, so the demo and the test
 suite cannot drift apart.
 """
 
