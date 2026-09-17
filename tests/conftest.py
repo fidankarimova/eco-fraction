@@ -17,6 +17,8 @@ def settings() -> Settings:
         backfill_days=1,
         backfill_step_minutes=15,
         serve_frontend=False,
+        auto_anchor=True,
+        enable_attack_console=True,
         log_level="WARNING",
         environment="test",
     )

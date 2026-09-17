@@ -1,9 +1,10 @@
-# Eco-Fraction Stage 1 - all free and open source (MIT / BSD / Apache-2.0).
+# Eco-Fraction - all free and open source (MIT / BSD / Apache-2.0).
 fastapi==0.141.1
 uvicorn[standard]==0.40.0
 SQLAlchemy==2.0.51
 pydantic==2.12.4
 pydantic-settings==2.13.0
+cryptography==46.0.6
 
 # Test-only
 pytest==8.4.2

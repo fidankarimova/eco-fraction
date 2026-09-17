@@ -9,3 +9,4 @@ data/*.db-shm
 .pytest_cache/
 .ruff_cache/
 .DS_Store
+.idea/

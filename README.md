@@ -1,11 +1,22 @@
-# Eco-Fraction — Stage 1: verifiable generation telemetry
+# Eco-Fraction — verifiable generation telemetry and fractional revenue
 
-Local prototype of the measurement layer for Eco-Fraction (TEKNOFEST 2026,
-Finansal Teknolojiler Yarışması, team VoltLedger).
+Local prototype for Eco-Fraction (TEKNOFEST 2026, Finansal Teknolojiler
+Yarışması, team VoltLedger).
 
-Stage 1 delivers the bottom of the pipeline: a simulated meter on a solar asset,
-a persistence layer, a read API, and a dashboard. No blockchain, no machine
-learning, no payments — those sit on top of this and come later.
+The pipeline, end to end, in the order that makes the claims true:
+
+    sense → sign → validate → anchor → account → distribute
+
+A simulated meter measures a solar array with a physical PV model, signs each
+reading at the edge with Ed25519, and submits it. Eight independent checks decide
+whether the reading may be trusted. Trusted readings are batched into a Merkle
+tree and anchored. Only anchored, verified energy produces an impact record and
+revenue, and that revenue accrues to fractional token holders who pull their
+share.
+
+**Trust is a precondition of payment, not a badge on a dashboard.** An untrusted
+reading contributes no energy, no CO₂ and no money — and you can prove it live by
+pressing a button that tampers with the meter.
 
 **Everything here is free and open source.** No cloud account, no credit card, no
 API key, no paid service. FastAPI + SQLAlchemy + SQLite on the backend; plain
@@ -13,6 +24,44 @@ HTML, CSS and JavaScript on the frontend with no CDN and no build step, so the
 dashboard renders with the network unplugged.
 
 ---
+
+## Measured results
+
+Reproduce all of these with `python -m scripts.evidence_report`:
+
+| What | Result |
+| --- | --- |
+| Attacks in the suite detected | **6 / 6 (100%)** |
+| False positives on honest telemetry | **0 of 4,033 (0.0000%)** |
+| Ingest + validation throughput | ~2,300 readings/s on one laptop core |
+| On-chain footprint | 4,038 readings → **one 32-byte Merkle root** |
+| Inclusion proof length | 12 hashes |
+| Proof verification | 200 proofs in 2.7 ms |
+| Distribution cost at 10,000 holders | **1 accumulator update**, 0.31 ms |
+| Specific yield (Baku, August) | 5.24 kWh/kWp/day |
+
+## The oracle problem, answered by demonstration
+
+Blockchain proves a number was not changed *after* it was written. It says
+nothing about whether the number was true when written. If the plant owner
+controls the sensor, they control your "verified" data.
+
+So validation uses three independent kinds of check, because no single compromise
+defeats all three:
+
+| Kind | Checks | Catches |
+| --- | --- | --- |
+| Cryptographic | signature, sequence, timestamp | edited, replayed, back-dated readings |
+| Physical | night generation, clear-sky ceiling, ramp rate | values no real array could produce — *even when correctly signed by a compromised device* |
+| Cross-reference | reference consistency, sustained bias | a device reporting internally-consistent fiction |
+
+A **replay** attack is physically perfect and only cryptography sees it. An
+**inflated output** attack is perfectly signed and only physics sees it. That is
+why both layers exist.
+
+The dashboard has a "Try to cheat the meter" panel with six real manipulations.
+Press one and watch the reading get rejected, the failed checks light up, and the
+energy drop out of the revenue calculation. Hand it to a juror.
 
 ## The data is modelled, not faked
 
@@ -94,20 +143,46 @@ python -m scripts.seed_history --reset --days 7             # wipe and rebuild
 
 Interactive docs at `/api/docs`; OpenAPI schema at `/api/openapi.json`.
 
+**Telemetry**
+
 | Method | Path | Purpose |
 | --- | --- | --- |
-| GET | `/api/v1/health` | Liveness, environment, stored reading count |
+| GET | `/api/v1/health` | Liveness, environment, reading count, schema version |
 | GET | `/api/v1/assets` | All assets with device counts |
-| GET | `/api/v1/assets/{id}` | One asset's nameplate and siting parameters |
-| GET | `/api/v1/assets/{id}/summary` | Current power, energy today, lifetime energy, status |
-| GET | `/api/v1/assets/{id}/readings/latest` | Most recent raw reading |
-| GET | `/api/v1/assets/{id}/readings` | Historical readings — `start`, `end`, `limit`, `order` |
-| GET | `/api/v1/assets/{id}/series` | Bucketed series for charting — `window_hours`, `bucket_minutes` |
+| GET | `/api/v1/assets/{id}` | Nameplate, siting and emission-factor provenance |
+| GET | `/api/v1/assets/{id}/summary` | Power, energy, status, trust score, claimability |
+| GET | `/api/v1/assets/{id}/readings/latest` | Most recent reading with its signature and verdict |
+| GET | `/api/v1/assets/{id}/readings` | History — `start`, `end`, `limit`, `order` |
+| GET | `/api/v1/assets/{id}/series` | Bucketed series — `window_hours`, `bucket_minutes` |
+
+**Verification**
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| GET | `/api/v1/assets/{id}/trust` | Trust rate, failing checks, latest anchor, attack log |
+| POST | `/api/v1/assets/{id}/anchor` | Batch, Merkle-root and settle un-anchored readings |
+| GET | `/api/v1/assets/{id}/batches` | Anchored batch history |
+| GET | `/api/v1/verify/reading/{id}` | **Public proof** that a reading is in an anchored batch |
+| GET | `/api/v1/verify/batch/{root}` | Recompute a root, with its revenue and impact |
+| GET | `/api/v1/attacks` | The attack catalogue |
+| POST | `/api/v1/assets/{id}/attacks/{key}` | Inject a manipulation and see the verdict |
+
+**Tokenisation and impact**
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| GET | `/api/v1/assets/{id}/token` | Supply, price, holders, undistributed revenue |
+| GET | `/api/v1/assets/{id}/token/holders/{address}` | One holder's stake and claimable balance |
+| POST | `/api/v1/assets/{id}/token/purchase` | Buy fractional tokens (mock USDC) |
+| POST | `/api/v1/assets/{id}/token/claim` | Pull accrued revenue — O(1) per holder |
+| GET | `/api/v1/assets/{id}/revenue` | Gross, platform fee, O&M, net, distributed |
+| GET | `/api/v1/assets/{id}/impact` | Deterministic CO₂ accounting with certificate status |
 
 ```bash
 curl localhost:8000/api/v1/assets/solar-baku-01/summary
-curl "localhost:8000/api/v1/assets/solar-baku-01/series?window_hours=24&bucket_minutes=15"
-curl "localhost:8000/api/v1/assets/solar-baku-01/readings?limit=5&order=desc"
+curl localhost:8000/api/v1/assets/solar-baku-01/trust
+curl -X POST localhost:8000/api/v1/assets/solar-baku-01/attacks/inflate_output
+curl localhost:8000/api/v1/verify/reading/1
 ```
 
 All timestamps are UTC and explicitly timezone-aware. The dashboard converts to
@@ -172,26 +247,41 @@ eco-fraction/
 Recorded now so the final report can state them honestly rather than implying a
 production stack exists.
 
-| Production component | Stage 1 substitute | Production alternative |
+| Production component | Prototype substitute | Production alternative |
 | --- | --- | --- |
 | AWS IoT Core ingest | In-process simulated device writing directly to the DB | Self-hosted Mosquitto or EMQX (both open source) before any managed broker |
 | Apache Kafka stream | Not used — unnecessary at this throughput | Redpanda or Kafka once device count justifies it |
 | Managed time-series database | Local SQLite | Local PostgreSQL + TimescaleDB, both open source |
 | Physical revenue-grade meter | Physics-based simulated meter | ESP32 + INA219 shunt, or the inverter's own local API |
 | Paid weather/irradiance API | Deterministic in-process cloud model | Open-Meteo, NASA POWER or PVGIS — all free, no key |
-| Paid blockchain RPC | Not yet used | Local Anvil node first, then a public Polygon Amoy endpoint |
-| USDC settlement | Not yet used | Mock ERC-20 on a local chain; never real funds |
-| Commercial KYC vendor | Not yet used | Mock registry contract with a whitelist |
+| Paid blockchain RPC | Merkle roots in a local append-only anchor log, labelled `local-anchor` | `AnchorRegistry` on Polygon Amoy via a free public RPC; the cryptography does not change |
+| ERC-1155 token contract | `backend/ledger.py`, an executable specification of the same semantics | Solidity contract with the transfer hook; the Python tests become the contract tests |
+| USDC settlement | Mock USDC integers on a local ledger; **no real funds** | Test USDC on Amoy. Real settlement needs a licence and is out of scope |
+| Commercial KYC vendor | `kyc_verified` flag on the holder record | Same gate as a Solidity transfer hook against a KYC registry |
+| Paid ML platform (XGBoost/LSTM) | Deterministic physics + statistical bias detection, measured against honest data | Gradient boosting on the residuals once labelled fault data exists — see "Known gaps" |
 
 ## Known gaps, stated deliberately
 
 - **The grid emission factor is a placeholder** (0.58 kg CO₂e/kWh). The dashboard
   labels the CO₂ figure `unverified factor` on purpose. It must be replaced with
   a cited national figure before the number appears in the report or on a slide.
-- **The device is simulated and says so.** Stage 1 makes no claim of verified
-  data. Signing, cross-validation against independent reference data, and Merkle
-  anchoring are Stage 2 — and the `sequence` and `payload_hash` columns already
-  exist so that work needs no migration.
+- **The device is simulated and says so.** Signing and validation prove the data
+  path is tamper-evident; they cannot prove a simulated array exists. The claim
+  this prototype supports is "manipulation of the telemetry path is detectable",
+  not "this plant produced this energy".
+- **The independent reference is a clear-sky model, not satellite data.** It
+  bounds what is physically possible and catches sustained over-reporting. A
+  production system cross-checks against satellite irradiance, the inverter's own
+  counter and the settlement meter. Free sources exist (Open-Meteo, NASA POWER,
+  PVGIS) and are the next honest upgrade.
+- **No machine learning model is trained yet.** The submitted report named
+  XGBoost and LSTM. Those need labelled fault data and a baseline to beat; the
+  physics and statistical checks are the correct baseline, and any model must be
+  shown to beat them before it earns a place. Claiming a trained model here would
+  be the kind of unsupported assertion this project exists to avoid.
+- **The anchor is local.** Merkle roots are real and proofs verify, but they are
+  recorded in a local log, not on Polygon. Everything the chain will store is
+  already computed; only the destination changes.
 - **Lifetime energy means "since monitoring began"**, not since the array was
   commissioned. The dashboard labels it that way.
 

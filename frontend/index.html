@@ -96,6 +96,85 @@
     </figure>
   </section>
 
+  <section class="panel" aria-labelledby="trust-heading">
+    <div class="panel__head">
+      <h2 id="trust-heading">Data verification</h2>
+      <p class="panel__note">every reading signed at the device and checked against physics</p>
+    </div>
+    <div class="trust">
+      <div class="trust__scores">
+        <div class="trust__stat">
+          <p class="lbl">trusted readings (24 h)</p>
+          <p class="value mono value--small"><span id="trust-rate">—</span><span class="unit">%</span></p>
+          <p class="sub"><span class="mono" id="trust-rejected">—</span> rejected of
+            <span class="mono" id="trust-samples">—</span></p>
+        </div>
+        <div class="trust__stat">
+          <p class="lbl">attacks caught</p>
+          <p class="value mono value--small"><span id="attack-caught">—</span></p>
+          <p class="sub">detection rate <span class="mono" id="attack-rate">—</span></p>
+        </div>
+        <div class="trust__stat trust__stat--wide">
+          <p class="lbl">latest anchored batch</p>
+          <p class="hash mono" id="merkle-root">—</p>
+          <p class="sub"><span class="mono" id="batch-readings">—</span> readings ·
+            <span id="anchor-target" class="tag">local-anchor</span>
+            <a href="#" id="verify-link" class="verify-link" hidden>verify a reading →</a></p>
+        </div>
+      </div>
+      <div class="checks" id="checks"></div>
+    </div>
+  </section>
+
+  <section class="panel panel--attack" aria-labelledby="attack-heading">
+    <div class="panel__head">
+      <h2 id="attack-heading">Try to cheat the meter</h2>
+      <p class="panel__note">inject a real manipulation and watch validation respond</p>
+    </div>
+    <div class="attack">
+      <div class="attack__buttons" id="attack-buttons"></div>
+      <div class="attack__result" id="attack-result" hidden>
+        <p class="attack__verdict" id="attack-verdict"></p>
+        <p class="attack__story" id="attack-story"></p>
+        <ul class="attack__checks" id="attack-checks"></ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel" aria-labelledby="invest-heading">
+    <div class="panel__head">
+      <h2 id="invest-heading">Fractional ownership</h2>
+      <p class="panel__note">mock USDC on a local ledger · no real funds</p>
+    </div>
+    <div class="invest">
+      <div class="invest__stats">
+        <div class="trust__stat">
+          <p class="lbl">your holding</p>
+          <p class="value mono value--small"><span id="holder-tokens">0</span><span class="unit">tokens</span></p>
+          <p class="sub"><span class="mono" id="holder-percent">0</span>% of the array ·
+            <span class="mono" id="holder-invested">0</span> USDC in</p>
+        </div>
+        <div class="trust__stat">
+          <p class="lbl">claimable revenue</p>
+          <p class="value mono value--small"><span id="holder-claimable">0.000000</span><span class="unit">USDC</span></p>
+          <p class="sub">claimed to date <span class="mono" id="holder-claimed">0.000000</span></p>
+        </div>
+        <div class="trust__stat">
+          <p class="lbl">token supply</p>
+          <p class="value mono value--small"><span id="token-sold">0</span><span class="unit">/ <span id="token-supply">0</span></span></p>
+          <p class="sub"><span class="mono" id="token-price">—</span> USDC minimum ·
+            <span class="mono" id="token-holders">0</span> holders</p>
+        </div>
+      </div>
+      <div class="invest__actions">
+        <button type="button" id="buy-btn" class="btn btn--primary">Buy 1 token (50 USDC)</button>
+        <button type="button" id="claim-btn" class="btn">Claim revenue</button>
+        <button type="button" id="anchor-btn" class="btn">Anchor &amp; settle now</button>
+        <span class="invest__note" id="invest-note"></span>
+      </div>
+    </div>
+  </section>
+
   <section class="panel" aria-labelledby="recent-heading">
     <div class="panel__head">
       <h2 id="recent-heading">Recent readings</h2>
@@ -112,10 +191,11 @@
             <th scope="col" class="num">Module (°C)</th>
             <th scope="col" class="num">Interval (Wh)</th>
             <th scope="col" class="num">Seq</th>
+            <th scope="col">Verified</th>
           </tr>
         </thead>
         <tbody id="readings-body">
-          <tr><td colspan="6" class="empty">Loading readings…</td></tr>
+          <tr><td colspan="7" class="empty">Loading readings…</td></tr>
         </tbody>
       </table>
     </div>
@@ -123,10 +203,12 @@
 </main>
 
 <footer class="foot">
-  <p>Stage 1 prototype. Telemetry is produced by a simulated meter driven by a
-     physical PV model (NOAA solar position, Haurwitz clear-sky, Erbs diffuse split,
-     NOCT thermal model). No blockchain, payment or real financial transaction is
-     involved.</p>
+  <p>Prototype. Telemetry comes from a simulated meter driven by a physical PV model
+     (NOAA solar position, Haurwitz clear-sky, Erbs diffuse split, NOCT thermal model),
+     signed at the edge with Ed25519 and validated by eight independent checks before
+     it can contribute energy, impact or revenue. Merkle roots are recorded in a local
+     anchor log; Polygon Amoy testnet replaces that in Stage 3. Settlement uses mock
+     USDC on a local ledger — <strong>no real funds are involved anywhere</strong>.</p>
   <p><a href="/api/docs">API documentation</a></p>
 </footer>
 

@@ -10,6 +10,8 @@
   var FAST_POLL_MS = 5000;
   var SERIES_POLL_MS = 15000;
 
+  var DEMO_ADDRESS = "0xDEMO000000000000000000000000000000000001";
+
   var state = {
     assetId: null,
     asset: null,
@@ -24,7 +26,13 @@
    "status-detail", "plant-clock", "banner", "banner-text", "power-value",
    "power-meter", "power-percent", "energy-today", "peak-today", "yield-today",
    "energy-total", "co2-total", "irradiance", "module-temp", "ambient-temp",
-   "chart", "chart-total", "tooltip", "readings-body", "reading-count"
+   "chart", "chart-total", "tooltip", "readings-body", "reading-count",
+   "trust-rate", "trust-rejected", "trust-samples", "attack-caught", "attack-rate",
+   "merkle-root", "batch-readings", "anchor-target", "verify-link", "checks",
+   "attack-buttons", "attack-result", "attack-verdict", "attack-story", "attack-checks",
+   "holder-tokens", "holder-percent", "holder-invested", "holder-claimable",
+   "holder-claimed", "token-sold", "token-supply", "token-price", "token-holders",
+   "buy-btn", "claim-btn", "anchor-btn", "invest-note"
   ].forEach(function (id) {
     el[id] = document.getElementById(id);
   });
@@ -42,6 +50,19 @@
         }
         return response.json();
       });
+  }
+
+  function postJson(path, body) {
+    return fetch(API + path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(body || {})
+    }).then(function (response) {
+      return response.json().then(function (data) {
+        if (!response.ok) throw new Error(data.detail || ("HTTP " + response.status));
+        return data;
+      });
+    });
   }
 
   function offsetHours() {
@@ -154,7 +175,7 @@
       var empty = document.createElement("tr");
       var cell = document.createElement("td");
       cell.className = "empty";
-      cell.colSpan = 6;
+      cell.colSpan = 7;
       cell.textContent = "No readings stored yet. The simulator writes one every few seconds.";
       empty.appendChild(cell);
       body.appendChild(empty);
@@ -163,13 +184,18 @@
 
     page.readings.forEach(function (reading) {
       var row = document.createElement("tr");
+      if (!reading.is_trusted) row.className = "row--rejected";
       var cells = [
         { text: clockOf(reading.recorded_at), cls: "" },
         { text: num(reading.ac_power_w, 1), cls: "num" },
         { text: num(reading.poa_irradiance_w_m2, 1), cls: "num" },
         { text: num(reading.module_temp_c, 1), cls: "num" },
         { text: num(reading.energy_wh, 3), cls: "num" },
-        { text: String(reading.sequence), cls: "num dim" }
+        { text: String(reading.sequence), cls: "num dim" },
+        {
+          text: reading.is_trusted ? "verified" : ("rejected: " + reading.trust_flags),
+          cls: reading.is_trusted ? "verified-yes" : "verified-no"
+        }
       ];
       cells.forEach(function (spec) {
         var td = document.createElement("td");
@@ -416,6 +442,185 @@
     overlay.addEventListener("mouseleave", hide);
   }
 
+  /* ---------------- verification ---------------- */
+
+  var CHECK_LABELS = {
+    signature: "Device signature",
+    sequence: "Replay protection",
+    timestamp: "Timestamp window",
+    night_generation: "No night generation",
+    clear_sky_ceiling: "Clear-sky ceiling",
+    rate_of_change: "Ramp rate",
+    irradiance_consistency: "Reference cross-check",
+    sustained_bias: "Sustained bias"
+  };
+
+  function renderTrust(report) {
+    el["trust-rate"].textContent = num(report.trust_rate_percent, 2);
+    el["trust-rejected"].textContent = report.rejected_count;
+    el["trust-samples"].textContent = report.sample_count.toLocaleString("en-US");
+
+    el["attack-caught"].textContent = report.attack_detected + " / " + report.attack_total;
+    el["attack-rate"].textContent =
+      report.attack_detection_rate_percent === null
+        ? "no attacks run yet"
+        : num(report.attack_detection_rate_percent, 1) + "%";
+
+    if (report.latest_batch) {
+      el["merkle-root"].textContent = report.latest_batch.merkle_root;
+      el["batch-readings"].textContent = report.latest_batch.reading_count;
+      el["anchor-target"].textContent = report.latest_batch.anchor_target;
+      el["verify-link"].hidden = false;
+      el["verify-link"].href =
+        API + "/verify/batch/" + report.latest_batch.merkle_root;
+      el["verify-link"].target = "_blank";
+    } else {
+      el["merkle-root"].textContent = "nothing anchored yet";
+      el["batch-readings"].textContent = "0";
+    }
+
+    var failing = report.failing_checks || {};
+    el.checks.textContent = "";
+    Object.keys(CHECK_LABELS).forEach(function (key) {
+      var failures = failing[key] || 0;
+      var box = document.createElement("div");
+      box.className = "check " + (failures ? "check--fail" : "check--pass");
+      var mark = document.createElement("span");
+      mark.className = "check__mark";
+      mark.textContent = failures ? "\u2717" : "\u2713";
+      var name = document.createElement("span");
+      name.className = "check__name";
+      name.textContent = CHECK_LABELS[key] + (failures ? " (" + failures + ")" : "");
+      box.appendChild(mark);
+      box.appendChild(name);
+      el.checks.appendChild(box);
+    });
+  }
+
+  function renderAttackResult(result) {
+    var box = el["attack-result"];
+    box.hidden = false;
+    box.setAttribute("data-detected", String(result.detected));
+    el["attack-verdict"].textContent = result.detected
+      ? "\u2713 Caught \u2014 " + result.title + " rejected"
+      : "\u2717 NOT DETECTED \u2014 " + result.title + " passed validation";
+    el["attack-story"].textContent = result.story + " " + result.explanation;
+
+    el["attack-checks"].textContent = "";
+    result.checks.forEach(function (check) {
+      var item = document.createElement("li");
+      if (!check.passed) item.className = "fail";
+      item.textContent =
+        (check.passed ? "\u2713 " : "\u2717 ") +
+        (CHECK_LABELS[check.name] || check.name) + " \u2014 " + check.detail;
+      el["attack-checks"].appendChild(item);
+    });
+  }
+
+  function buildAttackButtons(attacks) {
+    el["attack-buttons"].textContent = "";
+    attacks.forEach(function (attack) {
+      var button = document.createElement("button");
+      button.type = "button";
+      button.className = "btn btn--attack";
+      button.textContent = attack.title;
+      button.title = attack.story;
+      button.addEventListener("click", function () {
+        button.disabled = true;
+        postJson("/assets/" + state.assetId + "/attacks/" + attack.key)
+          .then(function (result) {
+            renderAttackResult(result);
+            return Promise.all([refreshFast(), refreshTrust()]);
+          })
+          .catch(function (error) {
+            el["attack-verdict"].textContent = "Injection failed: " + error.message;
+            el["attack-result"].hidden = false;
+          })
+          .then(function () { button.disabled = false; });
+      });
+      el["attack-buttons"].appendChild(button);
+    });
+  }
+
+  /* ---------------- investor ---------------- */
+
+  function renderToken(ledger, holder) {
+    el["token-sold"].textContent = ledger.circulating_supply.toLocaleString("en-US");
+    el["token-supply"].textContent = ledger.total_supply.toLocaleString("en-US");
+    el["token-price"].textContent = num(ledger.token_price_usdc, 2);
+    el["token-holders"].textContent = ledger.holder_count;
+
+    el["holder-tokens"].textContent = holder.token_balance.toLocaleString("en-US");
+    el["holder-percent"].textContent = num(holder.ownership_percent, 4);
+    el["holder-invested"].textContent = num(holder.investment_usdc, 2);
+    el["holder-claimable"].textContent = num(holder.claimable_usdc, 6);
+    el["holder-claimed"].textContent = num(holder.claimed_usdc, 6);
+
+    if (ledger.paused) {
+      el["invest-note"].textContent = "Distribution paused: " + ledger.pause_reason;
+    }
+  }
+
+  function refreshToken() {
+    if (!state.assetId) return Promise.resolve();
+    return Promise.all([
+      request("/assets/" + state.assetId + "/token"),
+      request("/assets/" + state.assetId + "/token/holders/" + DEMO_ADDRESS)
+    ]).then(function (results) {
+      renderToken(results[0], results[1]);
+    }).catch(function () { /* connectivity is reported by the fast poll */ });
+  }
+
+  function bindInvestorActions() {
+    el["buy-btn"].addEventListener("click", function () {
+      el["buy-btn"].disabled = true;
+      el["invest-note"].textContent = "";
+      postJson("/assets/" + state.assetId + "/token/purchase",
+               { address: DEMO_ADDRESS, token_count: 1 })
+        .then(function () {
+          el["invest-note"].textContent = "Bought 1 token with mock USDC.";
+          return refreshToken();
+        })
+        .catch(function (error) { el["invest-note"].textContent = error.message; })
+        .then(function () { el["buy-btn"].disabled = false; });
+    });
+
+    el["claim-btn"].addEventListener("click", function () {
+      el["claim-btn"].disabled = true;
+      el["invest-note"].textContent = "";
+      postJson("/assets/" + state.assetId + "/token/claim", { address: DEMO_ADDRESS })
+        .then(function (result) {
+          el["invest-note"].textContent =
+            "Claimed " + num(result.claimed_usdc, 6) + " mock USDC.";
+          return refreshToken();
+        })
+        .catch(function (error) { el["invest-note"].textContent = error.message; })
+        .then(function () { el["claim-btn"].disabled = false; });
+    });
+
+    el["anchor-btn"].addEventListener("click", function () {
+      el["anchor-btn"].disabled = true;
+      el["invest-note"].textContent = "";
+      postJson("/assets/" + state.assetId + "/anchor")
+        .then(function (result) {
+          el["invest-note"].textContent = result.anchored
+            ? ("Anchored " + result.reading_count + " readings, root " +
+               result.merkle_root.slice(0, 16) + "\u2026")
+            : result.detail;
+          return Promise.all([refreshTrust(), refreshToken()]);
+        })
+        .catch(function (error) { el["invest-note"].textContent = error.message; })
+        .then(function () { el["anchor-btn"].disabled = false; });
+    });
+  }
+
+  function refreshTrust() {
+    if (!state.assetId) return Promise.resolve();
+    return request("/assets/" + state.assetId + "/trust?window_hours=24")
+      .then(renderTrust)
+      .catch(function () { /* connectivity is reported by the fast poll */ });
+  }
+
   /* ---------------- polling ---------------- */
 
   function refreshFast() {
@@ -492,10 +697,20 @@
       tickClock();
       setInterval(tickClock, 1000);
 
+      bindInvestorActions();
       refreshFast();
       refreshSeries();
+      refreshTrust();
+      refreshToken();
+
+      request("/attacks").then(buildAttackButtons).catch(function () {
+        el["attack-buttons"].textContent = "Attack console is disabled on this server.";
+      });
+
       setInterval(refreshFast, FAST_POLL_MS);
       setInterval(refreshSeries, SERIES_POLL_MS);
+      setInterval(refreshTrust, SERIES_POLL_MS);
+      setInterval(refreshToken, SERIES_POLL_MS);
     }).catch(function (error) {
       showBanner(
         "Cannot reach the API at " + API + " (" + error.message +

@@ -1,14 +1,18 @@
 """Persistence models.
 
-Three tables in Stage 1:
+Stage 1 covered assets, devices and readings. Stage 2 adds the verification and
+tokenisation layers described in the submitted report:
 
-* ``assets``   - the physical generator being monitored (and later tokenised)
-* ``devices``  - the metering units attached to an asset
-* ``readings`` - the immutable measurement stream
+* device public keys, so a reading is attributable
+* per-reading trust score and failed-check flags
+* ``anchor_batches`` - Merkle roots over validated readings
+* ``token_ledgers`` / ``token_holders`` - fractional ownership and accrual
+* ``revenue_events`` - energy converted to distributable revenue
+* ``impact_records`` - deterministic ESG accounting with certificate status
+* ``attack_events`` - audit trail for the adversarial demo
 
-The reading row already carries ``sequence`` and ``payload_hash`` because Stage 2
-adds per-device signatures and Merkle batching on top of exactly these fields.
-Nothing in Stage 1 depends on them, but writing them now means no migration later.
+``SCHEMA_VERSION`` is checked at startup; a prototype database from an older
+version is rebuilt automatically rather than failing with a confusing SQL error.
 """
 
 from __future__ import annotations
@@ -16,16 +20,20 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from sqlalchemy import (
+    Boolean,
     DateTime,
     Float,
     ForeignKey,
     Index,
     Integer,
     String,
+    Text,
     TypeDecorator,
     UniqueConstraint,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
+SCHEMA_VERSION = 2
 
 
 def utcnow() -> datetime:
@@ -61,6 +69,14 @@ class Base(DeclarativeBase):
     pass
 
 
+class SchemaInfo(Base):
+    __tablename__ = "schema_info"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    applied_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow)
+
+
 class Asset(Base):
     __tablename__ = "assets"
 
@@ -85,6 +101,15 @@ class Asset(Base):
     # Placeholder value. Before any impact figure is published it must be replaced
     # with a cited national grid emission factor - see README "Known gaps".
     grid_emission_factor_kg_per_kwh: Mapped[float] = mapped_column(Float, default=0.58)
+    emission_factor_source: Mapped[str] = mapped_column(
+        String(200), default="PLACEHOLDER - replace with a cited national factor"
+    )
+    certificate_status: Mapped[str] = mapped_column(String(40), default="unknown")
+
+    # Feed-in tariff used to turn verified energy into revenue, in micro-USDC/kWh.
+    tariff_micro_usdc_per_kwh: Mapped[int] = mapped_column(Integer, default=60_000)
+    platform_fee_bps: Mapped[int] = mapped_column(Integer, default=100)  # 1.00%
+    opex_bps: Mapped[int] = mapped_column(Integer, default=1_800)  # 18% O&M
 
     weather_seed: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow)
@@ -102,12 +127,39 @@ class Device(Base):
         ForeignKey("assets.id", ondelete="CASCADE"), nullable=False, index=True
     )
     model: Mapped[str] = mapped_column(String(120), default="simulated-meter")
-    firmware: Mapped[str] = mapped_column(String(40), default="0.1.0")
+    firmware: Mapped[str] = mapped_column(String(40), default="0.2.0")
     sample_interval_seconds: Mapped[int] = mapped_column(Integer, default=5)
-    is_simulated: Mapped[bool] = mapped_column(Integer, default=1)
-    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow)
+    is_simulated: Mapped[bool] = mapped_column(Boolean, default=True)
 
+    # The server needs only the public key. The private key is stored here solely
+    # because the "device" is a simulation running in the same process; on real
+    # hardware it is generated on-device and never leaves it.
+    public_key_hex: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    private_key_hex: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow)
     asset: Mapped[Asset] = relationship(back_populates="devices")
+
+
+class AnchorBatch(Base):
+    __tablename__ = "anchor_batches"
+    __table_args__ = (Index("ix_batches_asset_interval", "asset_id", "interval_start"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    asset_id: Mapped[str] = mapped_column(
+        ForeignKey("assets.id", ondelete="CASCADE"), nullable=False
+    )
+    interval_start: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    interval_end: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    merkle_root: Mapped[str] = mapped_column(String(64), nullable=False)
+    reading_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    trusted_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    verified_energy_wh: Mapped[float] = mapped_column(Float, nullable=False)
+    rejected_energy_wh: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    # "local-anchor" in Stage 2; a real Polygon Amoy transaction hash in Stage 3.
+    anchor_reference: Mapped[str] = mapped_column(String(80), nullable=False)
+    anchor_target: Mapped[str] = mapped_column(String(40), default="local-anchor")
+    anchored_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow)
 
 
 class Reading(Base):
@@ -124,9 +176,7 @@ class Reading(Base):
     device_id: Mapped[str] = mapped_column(
         ForeignKey("devices.id", ondelete="CASCADE"), nullable=False
     )
-    recorded_at: Mapped[datetime] = mapped_column(
-        UtcDateTime, nullable=False, index=True
-    )
+    recorded_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False, index=True)
     sequence: Mapped[int] = mapped_column(Integer, nullable=False)
 
     ac_power_w: Mapped[float] = mapped_column(Float, nullable=False)
@@ -139,5 +189,111 @@ class Reading(Base):
     energy_wh: Mapped[float] = mapped_column(Float, nullable=False)
     cumulative_energy_wh: Mapped[float] = mapped_column(Float, nullable=False)
 
-    # Reserved for Stage 2 (device signatures + Merkle anchoring).
-    payload_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Verification
+    payload_hash: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    signature: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    trust_score: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
+    is_trusted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    trust_flags: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    injected_attack: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    batch_id: Mapped[int | None] = mapped_column(
+        ForeignKey("anchor_batches.id"), nullable=True, index=True
+    )
+
+
+class RevenueEvent(Base):
+    __tablename__ = "revenue_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    asset_id: Mapped[str] = mapped_column(
+        ForeignKey("assets.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    batch_id: Mapped[int | None] = mapped_column(
+        ForeignKey("anchor_batches.id"), nullable=True
+    )
+    period_start: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    period_end: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    verified_energy_wh: Mapped[float] = mapped_column(Float, nullable=False)
+    gross_micro_usdc: Mapped[int] = mapped_column(Integer, nullable=False)
+    platform_fee_micro_usdc: Mapped[int] = mapped_column(Integer, nullable=False)
+    opex_micro_usdc: Mapped[int] = mapped_column(Integer, nullable=False)
+    net_micro_usdc: Mapped[int] = mapped_column(Integer, nullable=False)
+    distributed_micro_usdc: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow)
+
+
+class ImpactRecord(Base):
+    __tablename__ = "impact_records"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    asset_id: Mapped[str] = mapped_column(
+        ForeignKey("assets.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    batch_id: Mapped[int | None] = mapped_column(
+        ForeignKey("anchor_batches.id"), nullable=True
+    )
+    period_start: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    period_end: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    verified_kwh: Mapped[float] = mapped_column(Float, nullable=False)
+    rejected_kwh: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    emission_factor_kg_per_kwh: Mapped[float] = mapped_column(Float, nullable=False)
+    emission_factor_source: Mapped[str] = mapped_column(String(200), nullable=False)
+    co2e_avoided_kg: Mapped[float] = mapped_column(Float, nullable=False)
+    certificate_status: Mapped[str] = mapped_column(String(40), nullable=False)
+    is_claimable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    method_version: Mapped[str] = mapped_column(String(60), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow)
+
+
+class TokenLedger(Base):
+    __tablename__ = "token_ledgers"
+
+    asset_id: Mapped[str] = mapped_column(
+        ForeignKey("assets.id", ondelete="CASCADE"), primary_key=True
+    )
+    total_supply: Mapped[int] = mapped_column(Integer, nullable=False)
+    token_price_micro_usdc: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Scaled by 1e18 exactly as the Solidity accumulator will be. A uint256 does
+    # not fit a 64-bit column, so it is persisted as text - the same thing any
+    # indexer does with on-chain uint256 values.
+    acc_per_token: Mapped[str] = mapped_column(String(80), nullable=False, default="0")
+    total_deposited_micro_usdc: Mapped[int] = mapped_column(Integer, default=0)
+    total_claimed_micro_usdc: Mapped[int] = mapped_column(Integer, default=0)
+    undistributed_micro_usdc: Mapped[int] = mapped_column(Integer, default=0)
+    paused: Mapped[bool] = mapped_column(Boolean, default=False)
+    pause_reason: Mapped[str] = mapped_column(String(200), default="")
+
+
+class TokenHolder(Base):
+    __tablename__ = "token_holders"
+    __table_args__ = (
+        UniqueConstraint("asset_id", "address", name="uq_holder_asset_address"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    asset_id: Mapped[str] = mapped_column(
+        ForeignKey("assets.id", ondelete="CASCADE"), nullable=False
+    )
+    address: Mapped[str] = mapped_column(String(80), nullable=False)
+    balance: Mapped[int] = mapped_column(Integer, default=0)
+    reward_debt: Mapped[int] = mapped_column(Integer, default=0)
+    accrued_micro_usdc: Mapped[int] = mapped_column(Integer, default=0)
+    claimed_micro_usdc: Mapped[int] = mapped_column(Integer, default=0)
+    # Mock KYC: a real vendor is a paid service, so Stage 2 uses a local registry
+    # with the same gate semantics the Solidity transfer hook will enforce.
+    kyc_verified: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow)
+
+
+class AttackEvent(Base):
+    __tablename__ = "attack_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    asset_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    device_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    attack_type: Mapped[str] = mapped_column(String(60), nullable=False)
+    description: Mapped[str] = mapped_column(Text, default="")
+    detected: Mapped[bool] = mapped_column(Boolean, default=False)
+    detected_by: Mapped[str] = mapped_column(String(200), default="")
+    trust_score: Mapped[float] = mapped_column(Float, default=0.0)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow)

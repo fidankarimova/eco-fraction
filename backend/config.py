@@ -50,6 +50,11 @@ class Settings(BaseSettings):
     max_readings_per_request: int = Field(default=5000, ge=1, le=100_000)
     max_series_points: int = Field(default=1000, ge=10, le=10_000)
 
+    # Anchor the backfill into Merkle batches at startup.
+    auto_anchor: bool = True
+    # The adversarial demo console must be explicitly enabled.
+    enable_attack_console: bool = True
+
     serve_frontend: bool = True
     cors_origins: list[str] = ["*"]
 

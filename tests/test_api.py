@@ -46,6 +46,8 @@ def test_latest_reading_shape(client):
         assert field in reading
     assert reading["ac_power_w"] >= 0
     assert len(reading["payload_hash"]) == 64
+    assert len(reading["signature"]) == 128
+    assert reading["is_trusted"] is True
 
 
 def test_readings_pagination_and_order(client):
@@ -131,3 +133,104 @@ def test_timestamps_are_timezone_aware(client):
     series = client.get(f"/api/v1/assets/{ASSET_ID}/series?window_hours=6").json()
     first = series["points"][0]["bucket_start"]
     assert first.endswith("Z") or "+" in first
+
+
+# --- Stage 2: verification, tokenisation and impact over HTTP ---------------
+
+
+def test_trust_report(client):
+    body = client.get(f"/api/v1/assets/{ASSET_ID}/trust?window_hours=24").json()
+    assert body["sample_count"] > 0
+    assert body["trust_rate_percent"] == 100.0, "honest backfill must not be flagged"
+    assert body["anchored_batch_count"] >= 1
+    assert len(body["latest_batch"]["merkle_root"]) == 64
+
+
+def test_backfill_is_anchored_at_startup(client):
+    body = client.get(f"/api/v1/assets/{ASSET_ID}/batches").json()
+    assert body["count"] >= 1
+    assert body["batches"][0]["anchor_target"] == "local-anchor"
+
+
+def test_verify_reading_returns_a_working_proof(client):
+    reading = client.get(f"/api/v1/assets/{ASSET_ID}/readings?limit=1&order=asc").json()
+    reading_id = reading["readings"][0]["id"]
+    body = client.get(f"/api/v1/verify/reading/{reading_id}").json()
+    assert body["proof_verified"] is True
+    assert body["proof"]["proof_length"] > 0
+    assert len(body["merkle_root"]) == 64
+
+
+def test_verify_batch_recomputes_the_root(client):
+    batches = client.get(f"/api/v1/assets/{ASSET_ID}/batches").json()["batches"]
+    root = batches[0]["merkle_root"]
+    body = client.get(f"/api/v1/verify/batch/{root}").json()
+    assert body["root_matches"] is True
+    assert body["revenue"] is not None
+    assert body["impact"] is not None
+
+
+def test_verify_unknown_root_is_404(client):
+    assert client.get("/api/v1/verify/batch/" + "0" * 64).status_code == 404
+
+
+def test_attack_catalogue(client):
+    attacks = client.get("/api/v1/attacks").json()
+    assert len(attacks) == 6
+    assert {a["key"] for a in attacks} >= {"replay", "inflate_output", "phantom_night"}
+
+
+def test_every_attack_is_caught_over_http(client):
+    for attack in client.get("/api/v1/attacks").json():
+        result = client.post(
+            f"/api/v1/assets/{ASSET_ID}/attacks/{attack['key']}"
+        ).json()
+        assert result["detected"] is True, f"{attack['key']} was not detected"
+        assert result["failed_checks"]
+
+
+def test_unknown_attack_is_404(client):
+    assert client.post(f"/api/v1/assets/{ASSET_ID}/attacks/nope").status_code == 404
+
+
+def test_token_lifecycle_over_http(client):
+    address = "0xTESTHOLDER0000000000000000000000000000001"
+    ledger = client.get(f"/api/v1/assets/{ASSET_ID}/token").json()
+    assert ledger["total_supply"] == 2500
+    assert ledger["minimum_investment_usdc"] == 50.0
+
+    holder = client.post(
+        f"/api/v1/assets/{ASSET_ID}/token/purchase",
+        json={"address": address, "token_count": 25},
+    ).json()
+    assert holder["token_balance"] == 25
+    assert holder["investment_usdc"] == 1250.0
+
+    client.post(f"/api/v1/assets/{ASSET_ID}/anchor")
+    after = client.get(
+        f"/api/v1/assets/{ASSET_ID}/token/holders/{address}"
+    ).json()
+    assert after["claimable_usdc"] >= 0
+
+
+def test_purchase_beyond_supply_is_rejected(client):
+    response = client.post(
+        f"/api/v1/assets/{ASSET_ID}/token/purchase",
+        json={"address": "0xWHALE", "token_count": 2500},
+    )
+    assert response.status_code in (409, 422)
+
+
+def test_impact_reports_method_and_double_counting(client):
+    body = client.get(f"/api/v1/assets/{ASSET_ID}/impact").json()
+    assert "double_counting_note" in body
+    assert body["total_verified_kwh"] > 0
+    assert body["certificate_status"] == "unknown"
+    assert all(r["is_claimable"] is False for r in body["records"])
+
+
+def test_summary_exposes_trust_and_claimability(client):
+    body = client.get(f"/api/v1/assets/{ASSET_ID}/summary").json()
+    assert "latest_trust_score" in body
+    assert body["co2_is_claimable"] is False
+    assert "PLACEHOLDER" in body["emission_factor_source"]
